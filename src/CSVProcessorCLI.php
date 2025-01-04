@@ -13,26 +13,11 @@ if (php_sapi_name() !== 'cli') {
 // Set unlimited execution time for long-running processes
 set_time_limit(0);
 
-// Define necessary constants if not already defined
-defined('BASEPATH') or define('BASEPATH', dirname(dirname(dirname(dirname(__DIR__)))) . DIRECTORY_SEPARATOR);
-defined('FCPATH') or define('FCPATH', dirname(BASEPATH) . DIRECTORY_SEPARATOR);
-defined('APPPATH') or define('APPPATH', BASEPATH . 'application' . DIRECTORY_SEPARATOR);
+// Include Composer's autoloader (ensure 'vendor' directory exists)
+require_once __DIR__ . '/../../../../vendor/autoload.php';
 
-// Include Composer autoloader
-$autoloaders = [
-    __DIR__ . '/vendor/autoload.php',
-    __DIR__ . '/../vendor/autoload.php',
-    __DIR__ . '/../../vendor/autoload.php',
-    __DIR__ . '/../../../vendor/autoload.php',
-];
-
-foreach ($autoloaders as $autoloader) {
-    if (file_exists($autoloader)) {
-        // Load Composer's autoload file (ensure required libraries are loaded)
-        require_once $autoloader;
-        break;
-    }
-}
+// Include CodeIgniter's index.php (bootstrap) file to initialize the framework
+require_once __DIR__ . '/../../../../index.php';
 
 // Import the necessary class
 use OnlyPHP\Codeigniter3CSVImporter\CSVImportProcessor;
@@ -46,16 +31,11 @@ if (!$jobId) {
     exit(1);
 }
 
-// Log the start of the processing
-error_log('Starting CSV processing for job: ' . $jobId);
-
 try {
     // Initialize the processor and begin processing the file
     $processor = new CSVImportProcessor();
     $processor->processFile($jobId);
 
-    // Log success after processing
-    error_log('CSV processing completed for job: ' . $jobId);
     exit(0); // Exit successfully
 } catch (Exception $e) {
     // Log error if the processing fails
