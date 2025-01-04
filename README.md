@@ -102,6 +102,9 @@ $jobId = $processor->process('/path/to/your/file.csv');
 // Get processing status
 $status = $processor->getStatus($jobId);
 
+// Get processing status owner user id (return collection of array for all process)
+$status = $processor->getStatusByOwner($userid);
+
 // Status contains:
 [
     'total_process' => 100,
@@ -117,7 +120,8 @@ $status = $processor->getStatus($jobId);
     ],
     'file_name' => 'users.csv',
     'status' => 2, // 1=Pending, 2=Processing, 3=Completed, 4=Failed
-    'error_message' => '[]'
+    'error_message' => '[]',
+    'percentage_completion' => '10'
 ]
 ```
 
@@ -188,7 +192,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-The MIT License (MIT). Please see [License File](LICENSE.md) for more information.
+The MIT License (MIT). Please see [License File](license.md) for more information.
 
 ## 💖 Support
 

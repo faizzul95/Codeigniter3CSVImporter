@@ -1,16 +1,14 @@
 <?php
 
-/**
- * CSV Import Processor
- * A robust CSV importer library for CodeIgniter 3 with background processing support, progress tracking, and detailed statistics. Perfect for handling large CSV files without timeouts or memory issues
- */
-
 namespace OnlyPHP\Codeigniter3CSVImporter;
 
+use OnlyPHP\Codeigniter3CSVImporter\Traits\BackgroundRunnerTraits;
 use function Opis\Closure\{serialize, unserialize};
 
 class CSVImportProcessor
 {
+    use BackgroundRunnerTraits;
+
     private $ci;
     private $table = 'csv_process_jobs';
     private $update_interval = 250;
@@ -19,7 +17,6 @@ class CSVImportProcessor
     private $displayId = null;
     private $callback = null;
     private $models = null;
-    private $pathToCLIProcess = FCPATH . 'vendor/onlyphp/codeigniter3-csvimporter/src/CSVProcessorCLI.php';
 
     /**
      * Constructor - Initialize CI instance and check table existence
@@ -158,7 +155,7 @@ class CSVImportProcessor
 
             $this->ci->dbforge->add_field($fields);
             $this->ci->dbforge->add_key('id', TRUE);
-            $this->ci->dbforge->create_table($this->table);
+            $this->ci->dbforge->create_table($this->table, FALSE, ['ENGINE' => 'InnoDB', 'COLLATE' => 'utf8mb4_general_ci']);
         }
     }
 
@@ -265,8 +262,7 @@ class CSVImportProcessor
         $this->startBackgroundProcess($jobId);
 
         if (!$this->isProcessRunning($jobId)) {
-            // throw new \Exception("Process with job ID {$jobId} is not running.");
-            die("Process for job ID {$jobId} is not running.");
+            throw new \Exception("Process with job ID {$jobId} is not running.");
         }
 
         return $jobId;
@@ -487,86 +483,21 @@ class CSVImportProcessor
     }
 
     /**
-     * Check if the process is already running
-     * @param string $jobId
-     * @return bool
+     * Get job status with detailed statistics by owner
+     * @param int $userId
+     * @return array
      */
-    private function isProcessRunning(string $jobId): bool
+    public function getStatusByOwner(int $userId): array
     {
-        $command = '';
+        $jobs = $this->ci->db->get_where($this->table, ['user_id' => $userId])->result();
 
-        if (strncasecmp(PHP_OS, 'WIN', 3) === 0) {
-            // Windows: Use tasklist to check running processes
-            $command = "tasklist /FI \"IMAGENAME eq php.exe\" /FI \"WINDOWTITLE eq {$jobId}\"";
-        } else {
-            // Linux/Unix: Use ps to check running processes
-            $command = "ps aux | grep php | grep {$jobId} | grep -v grep";
+        if (empty($jobs)) {
+            return [];
         }
 
-        $output = [];
-        $exitCode = 0;
-
-        exec($command, $output, $exitCode);
-
-        // If output contains lines, the process is running
-        return !empty($output);
-    }
-
-    /**
-     * Start background processing using proc_open (supports both Windows and Linux)
-     * @param string $jobId
-     * @return void
-     */
-    private function startBackgroundProcess(string $jobId)
-    {
-        // $phpBinary = PHP_BINARY;
-        $phpBinary = 'php';
-        $scriptPath = $this->pathToCLIProcess;
-
-        // Prepare the command for both Windows and Linux
-        if (PHP_OS_FAMILY === 'Windows') {
-            // Windows: Use start to run the command in background
-            $command = "start /B \"$phpBinary\" \"$scriptPath\" \"$jobId\"";
-            $descriptorspec = [
-                0 => ["pipe", "r"],  // stdin
-                1 => ["pipe", "w"],  // stdout
-                2 => ["pipe", "w"]   // stderr
-            ];
-        } else {
-            // Linux: Use '&' to run the command in background
-            $command = "$phpBinary \"$scriptPath\" \"$jobId\" > /dev/null 2>&1 &";
-            $descriptorspec = [
-                0 => ["pipe", "r"],  // stdin
-                1 => ["pipe", "w"],  // stdout
-                2 => ["pipe", "w"]   // stderr
-            ];
-        }
-
-        // Open the process
-        $process = proc_open($command, $descriptorspec, $pipes);
-
-        if (is_resource($process)) {
-            // Optionally read from stderr or stdout if needed
-            $stderr = stream_get_contents($pipes[2]);
-            fclose($pipes[2]);
-
-            // Close stdin if not needed
-            fclose($pipes[0]);
-
-            // Close stdout
-            fclose($pipes[1]);
-
-            // Close process
-            $status = proc_get_status($process);
-            proc_close($process);
-
-            // Return whether the process started successfully
-            return $status['running'] === true;
-        } else {
-            log_message('error', 'Error starting background process: ' . $jobId);
-        }
-
-        return false;
+        return array_map(function ($job) {
+            return $this->formatJobData($job);
+        }, $jobs);
     }
 
     /**
@@ -574,7 +505,7 @@ class CSVImportProcessor
      * @param string $jobId
      * @return array|null
      */
-    public function getStatus(string $jobId)
+    public function getStatus(string $jobId): ?array
     {
         $job = $this->ci->db->get_where($this->table, ['job_id' => $jobId])->row();
 
@@ -582,19 +513,36 @@ class CSVImportProcessor
             return null;
         }
 
-        $estimateTime = $this->calculateEstimatedTime($job);
+        return $this->formatJobData($job);
+    }
+
+    /**
+     * Format job data for response
+     * @param object $job
+     * @return array
+     */
+    protected function formatJobData(object $job): array
+    {
+        $totalProcessed = (int)$job->total_processed;
+        $totalData = (int)$job->total_data;
+
+        // Calculate percentage completion based on total_data and total_processed
+        $percentageCompletion = $totalProcessed > 0
+            ? round(($totalProcessed / $totalData) * 100, 2)
+            : 0;
 
         return [
-            'total_process' => $job->total_processed,
-            'total_success' => $job->total_success,
-            'total_failed' => $job->total_failed,
-            'total_inserted' => $job->total_inserted,
-            'total_updated' => $job->total_updated,
+            'total_process' => $totalProcessed,
+            'total_success' => (int)$job->total_success,
+            'total_failed' => (int)$job->total_failed,
+            'total_inserted' => (int)$job->total_inserted,
+            'total_updated' => (int)$job->total_updated,
             'display_id' => $job->display_html_id,
-            'estimate_time' => $estimateTime,
+            'estimate_time' => $this->calculateEstimatedTime($job),
             'file_name' => $job->filename,
             'status' => $job->status,
-            'error_message' => $job->error_message
+            'error_message' => $job->error_message,
+            'percentage_completion' => $percentageCompletion
         ];
     }
 
