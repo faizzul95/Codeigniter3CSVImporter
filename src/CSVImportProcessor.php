@@ -261,10 +261,6 @@ class CSVImportProcessor
         // Start background processing
         $this->startBackgroundProcess($jobId);
 
-        if (!$this->isProcessRunning($jobId)) {
-            throw new \Exception("Process with job ID {$jobId} is not running.");
-        }
-
         return $jobId;
     }
 
@@ -336,7 +332,7 @@ class CSVImportProcessor
 
         // Update ini settings for this process
         set_time_limit(0);
-        ini_set('memory_limit', '3G');
+        ini_set('memory_limit', '2G');
 
         try {
 
@@ -411,7 +407,7 @@ class CSVImportProcessor
                 if ($processed % $this->update_interval === 0) {
                     $this->updateProgress($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
                     $needsUpdate = false;
-
+                    
                     // Close the DB connection after each batch of 100 rows
                     $this->ci->db->close();
                     sleep(1); // 1 second delay to avoid overloading the DB
@@ -445,6 +441,7 @@ class CSVImportProcessor
                 'run_time' => $runTime
             ]);
         } catch (\Exception $e) {
+            log_message('error', 'Error during file processing: ' . $e->getMessage());
             $this->updateJob($jobId, [
                 'status' => 4,
                 'error_message' => $e->getMessage(),

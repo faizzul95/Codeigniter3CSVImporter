@@ -4,152 +4,191 @@ namespace OnlyPHP\Codeigniter3CSVImporter\Traits;
 
 trait BackgroundRunnerTraits
 {
+    // Path to the CSV Processor CLI script
     private $pathToCLIProcess = FCPATH . 'vendor/onlyphp/codeigniter3-csvimporter/src/CSVProcessorCLI.php';
 
     /**
-     * Start background processing using proc_open (supports both Windows and Linux)
-     * @param string $jobId
-     * @return bool
+     * Start a background process for a given job ID.
+     *
+     * @param string $jobId The job ID to associate with the background process.
+     * @return bool Returns true if the background process started successfully, otherwise false.
      */
     private function startBackgroundProcess(string $jobId)
     {
-        $phpBinary = PHP_BINARY ?: 'php';
-        $scriptPath = str_replace('/', '\\', $this->pathToCLIProcess);
+        $phpBinary = 'php';
+        $scriptPath = str_replace('/', DIRECTORY_SEPARATOR, $this->pathToCLIProcess);
         $isWindows = PHP_OS_FAMILY === 'Windows';
 
-        // Debug logging
         log_message('debug', 'Starting background process');
         log_message('debug', 'PHP Binary: ' . $phpBinary);
         log_message('debug', 'Script Path: ' . $scriptPath);
         log_message('debug', 'Job ID: ' . $jobId);
         log_message('debug', 'Is Windows: ' . ($isWindows ? 'Yes' : 'No'));
 
+        // Check if the script exists
         if (!file_exists($scriptPath)) {
             log_message('error', 'CLI Script not found at: ' . $scriptPath);
             return false;
         }
 
+        // Start process based on the operating system
         if ($isWindows) {
-            // Create a temporary batch file to run the PHP script
-            $batchFile = sys_get_temp_dir() . '\\csv_import_' . uniqid() . '.bat';
-            $batchContent = '@echo off' . PHP_EOL;
-            $batchContent .= sprintf(
-                'start /B "CSV_Import_%s" "%s" "%s" "%s"',
-                $jobId,
-                $phpBinary,
-                $scriptPath,
-                $jobId
-            );
-
-            file_put_contents($batchFile, $batchContent);
-
-            // Set up process descriptor
-            $descriptorspec = [
-                0 => ['pipe', 'r'],  // stdin
-                1 => ['file', 'NUL', 'w'],  // stdout -> NUL
-                2 => ['file', 'NUL', 'w']   // stderr -> NUL
-            ];
-
-            // Set up process options
-            $options = [
-                'bypass_shell' => true,
-                'create_process_group' => true
-            ];
-
-            // Log the command that will be executed
-            log_message('debug', 'Batch file content: ' . $batchContent);
-
-            // Start the process
-            $process = proc_open($batchFile, $descriptorspec, $pipes, null, null, $options);
-
-            if (is_resource($process)) {
-                // Close stdin pipe
-                if (isset($pipes[0])) {
-                    fclose($pipes[0]);
-                }
-
-                // Get process status
-                $status = proc_get_status($process);
-                proc_close($process);
-
-                // Delete the temporary batch file
-                unlink($batchFile);
-
-                // Wait briefly and verify the process is running
-                sleep(1);
-                return $this->isProcessRunning($jobId);
-            }
-
-            // Clean up batch file if process failed to start
-            if (file_exists($batchFile)) {
-                unlink($batchFile);
-            }
-
-            log_message('error', 'Failed to start process using proc_open');
-            return false;
+            return $this->startWindowsProcess($jobId, $phpBinary, $scriptPath);
         } else {
-            // Unix/Linux handling
-            $cmd = sprintf('%s %s %s', $phpBinary, $scriptPath, $jobId);
-
-            $descriptorspec = [
-                0 => ['pipe', 'r'],
-                1 => ['file', '/dev/null', 'w'],
-                2 => ['file', '/dev/null', 'w']
-            ];
-
-            $process = proc_open($cmd, $descriptorspec, $pipes, null, null, ['bypass_shell' => true]);
-
-            if (is_resource($process)) {
-                fclose($pipes[0]);
-                proc_close($process);
-                sleep(1);
-                return $this->isProcessRunning($jobId);
-            }
-
-            return false;
+            return $this->startLinuxProcess($jobId, $phpBinary, $scriptPath);
         }
     }
 
     /**
-     * Check if the process is already running
-     * @param string $jobId
-     * @return bool
+     * Start a background process on Windows using a batch file.
+     *
+     * @param string $jobId The job ID to associate with the background process.
+     * @param string $phpBinary The PHP binary to use for running the script.
+     * @param string $scriptPath The path to the CSV Processor script.
+     * @return bool Returns true if the background process started successfully, otherwise false.
+     */
+    private function startWindowsProcess(string $jobId, string $phpBinary, string $scriptPath)
+    {
+        // Create a unique window title
+        $windowTitle = 'CSV_Import_' . $jobId;
+
+        // Create a temporary batch file with the necessary command to run the script in the background
+        $batchFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'csv_import_' . uniqid() . '.bat';
+        $batchContent = '@echo off' . PHP_EOL;
+        $batchContent .= sprintf(
+            'start /B /MIN "%s" "%s" "%s" "%s"',
+            $windowTitle,
+            $phpBinary,
+            $scriptPath,
+            $jobId
+        );
+
+        file_put_contents($batchFile, $batchContent);
+
+        // Log the batch file content for debugging
+        log_message('debug', 'Batch file content: ' . $batchContent);
+
+        $descriptorspec = [
+            0 => ['pipe', 'r'],
+            1 => ['file', 'NUL', 'w'],
+            2 => ['file', 'NUL', 'w']
+        ];
+
+        // Open the process using proc_open to execute the batch file
+        $process = proc_open($batchFile, $descriptorspec, $pipes, FCPATH, null, [
+            'bypass_shell' => true,
+            'create_process_group' => true
+        ]);
+
+        // Check if the process was started successfully
+        if (is_resource($process)) {
+            fclose($pipes[0]);
+            proc_close($process);
+            unlink($batchFile);
+
+            // Give the process time to start
+            sleep(1);
+            return $this->isProcessRunning($jobId);
+        }
+
+        // Clean up batch file if the process failed to start
+        if (file_exists($batchFile)) {
+            unlink($batchFile);
+        }
+
+        log_message('error', 'Failed to start process');
+        return false;
+    }
+
+    /**
+     * Start a background process on Linux using a shell command.
+     *
+     * @param string $jobId The job ID to associate with the background process.
+     * @param string $phpBinary The PHP binary to use for running the script.
+     * @param string $scriptPath The path to the CSV Processor script.
+     * @return bool Returns true if the background process started successfully, otherwise false.
+     */
+    private function startLinuxProcess(string $jobId, string $phpBinary, string $scriptPath)
+    {
+        // Check for active processes before starting a new one (optional for better resource management)
+        $runningProcesses = $this->getRunningProcessesCount($jobId);
+        if ($runningProcesses >= 5) {
+            log_message('error', 'Max concurrent processes reached for job ID: ' . $jobId);
+            return false;  // Max limit reached, don't start another process
+        }
+
+        // Command to run the process in the background and suppress output
+        $cmd = sprintf(
+            '%s %s %s > /dev/null 2>&1 & echo $!',
+            escapeshellarg($phpBinary),
+            escapeshellarg($scriptPath),
+            escapeshellarg($jobId)
+        );
+
+        exec($cmd, $output, $returnVar);
+        if ($returnVar !== 0) {
+            log_message('error', 'Failed to start background process on Linux. Error code: ' . $returnVar);
+            return false;
+        }
+
+        sleep(1);  // Give the process time to start
+        return $this->isProcessRunning($jobId);
+    }
+
+    /**
+     * Check if the background process for a given job ID is still running.
+     *
+     * @param string $jobId The job ID to check.
+     * @return bool Returns true if the process is running, otherwise false.
      */
     private function isProcessRunning(string $jobId): bool
     {
         $isWindows = PHP_OS_FAMILY === 'Windows';
 
         if ($isWindows) {
-            // Use more reliable Windows command to find the process
+            // Windows tasklist command
+            $windowTitle = 'CSV_Import_' . $jobId;
             $cmd = sprintf(
-                'tasklist /FI "WINDOWTITLE eq CSV_Import_%s" /FI "IMAGENAME eq php.exe" /NH',
-                $jobId
+                'tasklist /FI "WINDOWTITLE eq %s" /FI "IMAGENAME eq php.exe" /NH',
+                $windowTitle
             );
         } else {
+            // Linux/Unix command to check the process
             $cmd = sprintf(
-                "ps aux | grep '%s' | grep -v grep",
-                escapeshellarg($jobId)
+                "ps aux | grep -F '%s' | grep -v grep",
+                $jobId
             );
         }
 
         log_message('debug', 'Process check command: ' . $cmd);
 
         $output = [];
-        $returnVar = 0;
         exec($cmd, $output, $returnVar);
 
         log_message('debug', 'Process check output: ' . print_r($output, true));
 
         if ($isWindows) {
-            // Check if the output contains the php.exe process with our window title
-            foreach ($output as $line) {
-                if (stripos($line, 'php.exe') !== false) {
-                    return true;
-                }
-            }
-            return false;
+            return !empty(array_filter($output, function ($line) {
+                return stripos($line, 'php.exe') !== false;
+            }));
         }
 
         return !empty(array_filter($output));
+    }
+
+    /**
+     * Helper function to track the count of running processes for a specific job ID.
+     *
+     * @param string $jobId The job ID to check.
+     * @return int The count of running processes associated with the given job ID.
+     */
+    private function getRunningProcessesCount(string $jobId): int
+    {
+        $cmd = sprintf(
+            "ps aux | grep -F '%s' | grep -v grep",
+            $jobId
+        );
+        exec($cmd, $output);
+        return count($output);
     }
 }
