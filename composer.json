@@ -1,6 +1,6 @@
 {
     "name": "onlyphp/codeigniter3-csvimporter",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "A robust CSV importer library for CodeIgniter 3 with background processing support, progress tracking, and detailed statistics. Perfect for handling large CSV files without timeouts or memory issues.",
     "type": "library",
     "license": "MIT",
@@ -16,7 +16,7 @@
     },
     "autoload": {
         "psr-4": {
-          "OnlyPHP\\": "src/"
+          "OnlyPHP\\Codeigniter3CSVImporter\\": "src/"
         }
     },
     "minimum-stability": "stable",
