@@ -6,15 +6,33 @@
 
 A robust CSV importer library for CodeIgniter 3 with background processing support, progress tracking, and detailed statistics. Perfect for handling large CSV files without timeouts or memory issues.
 
+## ⚠️ Warning
+
+**DO NOT USE THIS PACKAGE IN PRODUCTION**
+
+This package is under active development and may contain critical bugs. It is primarily intended for personal use and testing. The current version has not undergone rigorous testing and may be unstable.
+
 ## ✨ Features
 
-- 🚀 Background processing support
+- 🚀 Background processing support with OS-specific optimizations
 - 📊 Real-time progress tracking
 - 📈 Detailed statistics (inserts/updates/errors)
 - ⚠️ Comprehensive error handling
-- 💻 Shared hosting compatible
+- 💻 Shared hosting compatible & Cross-platform compatible (Windows & Linux)
 - ⏰ No cron job required
 - 🛠️ Customizable processing logic
+- 🔄 Memory-efficient chunk processing
+- ⚡ Configurable processing parameters
+- 📝 Skip empty rows automatically
+- 🔍 Detailed error tracking
+
+## 🔧 System Requirements
+
+- PHP 8.0 or higher
+- CodeIgniter 3.x
+- `proc_open` and `proc_close` PHP functions enabled
+- `MySQL` database
+- Write permissions for temporary directory
 
 ## 📦 Installation
 
@@ -53,7 +71,7 @@ $processor->setCallback(function($row, $rowIndex, $models) {
 $jobId = $processor->process('/path/to/your/file.csv');
 ```
 
-### Advanced Usage
+### Advanced Configuration
 
 ```php
 $processor = new \OnlyPHP\CSVSimpleImporter\CSVImportProcessor();
@@ -64,8 +82,14 @@ $processor->setFileBelongsTo(1);
 // Set HTML element ID for frontend progress tracking
 $processor->setDisplayHTMLId('progress-bar-1');
 
-// Set whether to skip header row
-$processor->setSkipHeader(true);
+// Configure CSV processing parameters
+$processor->setSkipHeader(true)
+         ->setMemoryLimit('1G')
+         ->setDelimiter(',')
+         ->setEnclosure('"')
+         ->setEscape('\\')
+         ->setChunkSize(1000)
+         ->setRecordUpdateInterval(250);
 
 // Load specific models for processing
 $processor->setCallbackModel(['User_model', 'Product_model']);
@@ -93,7 +117,31 @@ $processor->setCallback(function($row, $rowIndex, $models) {
 });
 
 // Start processing
-$jobId = $processor->process('/path/to/your/file.csv');
+$jobId = $processor->process('/path/to/your/encryptFileName.csv', 'originalFileName.csv');
+```
+
+### Configuration Options
+
+| Method | Description | Default |
+|--------|-------------|---------|
+| `setMemoryLimit()` | Set PHP memory limit for processing | '1G' |
+| `setDelimiter()` | Set CSV delimiter character | ',' |
+| `setEnclosure()` | Set CSV enclosure character | '"' |
+| `setEscape()` | Set CSV escape character | '\\' |
+| `setChunkSize()` | Set number of rows to process in each chunk | 1000 |
+| `setRecordUpdateInterval()` | Set database update interval (min 100) | 200 |
+| `setSkipHeader()` | Set whether to skip the header row | true |
+
+### Process Control
+
+```php
+$processor = new \OnlyPHP\CSVSimpleImporter\CSVImportProcessor();
+
+// Kill a running process
+$processor->killProcess($jobId);
+
+// Check process status
+$status = $processor->getStatus($jobId);
 ```
 
 ### Tracking Progress
@@ -102,7 +150,7 @@ $jobId = $processor->process('/path/to/your/file.csv');
 // Get processing status
 $status = $processor->getStatus($jobId);
 
-// Get processing status owner user id (return collection of array for all process)
+// Get processing status by owner user ID (returns collection of all processes)
 $status = $processor->getStatusByOwner($userid);
 
 // Status contains:
@@ -112,6 +160,7 @@ $status = $processor->getStatusByOwner($userid);
     'total_failed' => 5,
     'total_inserted' => 80,
     'total_updated' => 15,
+    'total_skip_empty_row' => 3,
     'display_id' => 'progress-bar-1',
     'estimate_time' => [
         'hours' => 0,
@@ -141,8 +190,9 @@ function checkProgress(jobId) {
         $("#progress-bar-1").html("Import failed: " + response.error_message);
       } else {
         // Update progress
-        let progress = (response.total_process / response.total_data) * 100;
+        let progress = response.percentage_completion;
         $("#progress-bar-1").css("width", progress + "%");
+        $("#progress-bar-1").html(`${progress}% (${response.total_success} succeeded, ${response.total_failed} failed)`);
 
         // Check again in 2 seconds
         setTimeout(() => checkProgress(jobId), 2000);
@@ -170,7 +220,7 @@ The callback function should return an array with the following structure:
 return [
     'code' => 200,
     'action' => 'create', // or 'update'
-    'error' => ''
+    'message' => 'Success message'
 ];
 
 // Error response

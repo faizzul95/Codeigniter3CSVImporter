@@ -141,7 +141,7 @@ trait BackgroundRunnerTraits
      * @param string $jobId The job ID to check.
      * @return bool Returns true if the process is running, otherwise false.
      */
-    private function isProcessRunning(string $jobId): bool
+    private function isProcessRunning(string $jobId)
     {
         $isWindows = PHP_OS_FAMILY === 'Windows';
 
@@ -182,7 +182,7 @@ trait BackgroundRunnerTraits
      * @param string $jobId The job ID to check.
      * @return int The count of running processes associated with the given job ID.
      */
-    private function getRunningProcessesCount(string $jobId): int
+    private function getRunningProcessesCount(string $jobId)
     {
         $cmd = sprintf(
             "ps aux | grep -F '%s' | grep -v grep",
@@ -190,5 +190,65 @@ trait BackgroundRunnerTraits
         );
         exec($cmd, $output);
         return count($output);
+    }
+
+    /**
+     * Kill the background process for a specific job
+     * @param string $jobId
+     * @return bool
+     */
+    public function killProcess(string $jobId)
+    {
+        try {
+            // Get the job details
+            $job = $this->ci->db->get_where($this->table, ['job_id' => $jobId])->row();
+
+            if (!$job || $job->status != 2) {
+                return false; // Job not found or not in processing state
+            }
+
+            // Get process ID from the lock file
+            $lockFile = sys_get_temp_dir() . "/csv_import_{$jobId}.lock";
+            if (!file_exists($lockFile)) {
+                return false;
+            }
+
+            $pid = trim(file_get_contents($lockFile));
+            if (empty($pid)) {
+                return false;
+            }
+
+            // Kill the process based on operating system
+            if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+                // Windows
+                exec("taskkill /F /PID {$pid} 2>&1", $output, $returnCode);
+                $killed = $returnCode === 0;
+            } else {
+                // Linux/Unix
+                $killed = posix_kill((int)$pid, SIGTERM);
+                if (!$killed) {
+                    // Try force kill if SIGTERM fails
+                    $killed = posix_kill((int)$pid, SIGKILL);
+                }
+            }
+
+            if ($killed) {
+                // Update job status to failed
+                $this->updateJob($jobId, [
+                    'status' => 4,
+                    'error_message' => 'Process terminated by user',
+                    'end_time' => date('Y-m-d H:i:s')
+                ]);
+
+                // Remove the lock file
+                @unlink($lockFile);
+                return true;
+            }
+
+            return false;
+        } catch (\Exception $e) {
+            log_message('error', 'Error killing process: ' . $e->getMessage());
+            return false;
+        }
     }
 }

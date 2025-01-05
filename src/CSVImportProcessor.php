@@ -11,12 +11,17 @@ class CSVImportProcessor
 
     private $ci;
     private $table = 'csv_process_jobs';
-    private $update_interval = 250;
     private $skipHeader = true;
     private $userId = null;
     private $displayId = null;
     private $callback = null;
     private $models = null;
+    private $memory_limit = '1G';
+    private $delimiter = ',';
+    private $enclosure = '"';
+    private $escape = '\\';
+    private $chunk_size = 1000;
+    private $refresh_data = 200;
 
     /**
      * Constructor - Initialize CI instance and check table existence
@@ -193,17 +198,6 @@ class CSVImportProcessor
     }
 
     /**
-     * Set whether to skip header row
-     * @param bool $skip
-     * @return $this
-     */
-    public function setSkipHeader(bool $skip)
-    {
-        $this->skipHeader = $skip ? 1 : 0;
-        return $this;
-    }
-
-    /**
      * Set the model to initialize before processing
      * @param bool $skip
      * @return $this
@@ -215,26 +209,116 @@ class CSVImportProcessor
     }
 
     /**
+     * Set whether to skip header row
+     * @param bool $skip
+     * @return $this
+     */
+    public function setSkipHeader(bool $skip)
+    {
+        $this->skipHeader = $skip ? 1 : 0;
+        return $this;
+    }
+
+    /**
+     * Set memory limit for processing
+     * @param string $limit Memory limit (e.g., '2G', '512M')
+     * @return $this
+     */
+    public function setMemoryLimit(string $limit)
+    {
+        $this->memory_limit = $limit;
+        return $this;
+    }
+
+    /**
+     * Set CSV delimiter character
+     * @param string $delimiter
+     * @return $this
+     */
+    public function setDelimiter(string $delimiter)
+    {
+        $this->delimiter = $delimiter;
+        return $this;
+    }
+
+    /**
+     * Set CSV enclosure character
+     * @param string $enclosure
+     * @return $this
+     */
+    public function setEnclosure(string $enclosure)
+    {
+        $this->enclosure = $enclosure;
+        return $this;
+    }
+
+    /**
+     * Set CSV escape character
+     * @param string $escape
+     * @return $this
+     */
+    public function setEscape(string $escape)
+    {
+        $this->escape = $escape;
+        return $this;
+    }
+
+    /**
+     * Set chunk size for batch processing
+     * @param int $size Number of rows to process in each chunk
+     * @return $this
+     */
+    public function setChunkSize(int $size)
+    {
+        $this->chunk_size = $size;
+        return $this;
+    }
+
+    /**
+     * Set the interval for updating process records in the database.
+     * The interval must be at least 100 to ensure sufficient time between updates.
+     *
+     * @param int $interval Number of seconds for the interval to update the process records in the database.
+     * @throws InvalidArgumentException if the interval is less than 100.
+     * @return $this
+     */
+    public function setRecordUpdateInterval(int $interval)
+    {
+        if ($interval < 100) {
+            throw new \Exception('The interval must be at least 100.');
+        }
+
+        $this->refresh_data = $interval;
+        return $this;
+    }
+
+    /**
      * Initialize CSV processing job
      * @param string $filepath Full path to CSV file
+     * @param ?string $filename CSV file name
      * @return string Job ID
      * @throws \Exception
      */
-    public function process(string $filepath)
+    public function process(string $filepath, ?string $filename = null)
     {
         if (!$this->callback) {
             throw new \Exception('Callback function must be set before processing');
         }
 
-        if (!file_exists($filepath)) {
-            throw new \Exception('CSV file not found');
+        if (!file_exists($filepath) || !is_readable($filepath)) {
+            throw new \Exception("CSV file does not exist or is not readable: {$filepath}");
+        }
+
+        // Get file info
+        $fileInfo = pathinfo($filepath);
+        $filename = $filename ?: $fileInfo['basename'];
+
+        if (strtolower($fileInfo['extension']) !== 'csv') {
+            throw new \Exception("The file is not a valid CSV file: {$filepath}");
         }
 
         // Generate unique job ID
         $jobId = uniqid('csv_', true);
-
-        // Get file info
-        $fileInfo = pathinfo($filepath);
 
         // Count total rows (excluding header if needed)
         $totalRows = $this->countRows($filepath) - ($this->skipHeader ? 1 : 0);
@@ -246,7 +330,7 @@ class CSVImportProcessor
         $data = [
             'job_id' => $jobId,
             'filepath' => $filepath,
-            'filename' => $fileInfo['basename'],
+            'filename' => $filename,
             'user_id' => $this->userId,
             'total_data' => $totalRows,
             'skip_header' => $this->skipHeader,
@@ -267,24 +351,30 @@ class CSVImportProcessor
     /**
      * Initialize CSV processing job (Used for testing only)
      * @param string $filepath Full path to CSV file
+     * @param ?string $filename CSV file name
      * @return string Job ID
      * @throws \Exception
      */
-    public function processNow(string $filepath)
+    public function processNow(string $filepath, ?string $filename = null)
     {
         if (!$this->callback) {
             throw new \Exception('Callback function must be set before processing');
         }
 
-        if (!file_exists($filepath)) {
-            throw new \Exception('CSV file not found');
+        if (!file_exists($filepath) || !is_readable($filepath)) {
+            throw new \Exception("CSV file does not exist or is not readable: {$filepath}");
+        }
+
+        // Get file info
+        $fileInfo = pathinfo($filepath);
+        $filename = $filename ?: $fileInfo['basename'];
+
+        if (strtolower($fileInfo['extension']) !== 'csv') {
+            throw new \Exception("The file is not a valid CSV file: {$filepath}");
         }
 
         // Generate unique job ID
         $jobId = uniqid('csv_', true);
-
-        // Get file info
-        $fileInfo = pathinfo($filepath);
 
         // Count total rows (excluding header if needed)
         $totalRows = $this->countRows($filepath) - ($this->skipHeader ? 1 : 0);
@@ -296,7 +386,7 @@ class CSVImportProcessor
         $data = [
             'job_id' => $jobId,
             'filepath' => $filepath,
-            'filename' => $fileInfo['basename'],
+            'filename' => $filename,
             'user_id' => $this->userId,
             'total_data' => $totalRows,
             'skip_header' => $this->skipHeader,
@@ -322,9 +412,14 @@ class CSVImportProcessor
     {
         $job = $this->ci->db->get_where($this->table, ['job_id' => $jobId])->row();
 
-        if (!$job || $job->status != 1) {
+        // Create a lock file with process ID
+        $lockFile = sys_get_temp_dir() . "/csv_import_{$jobId}.lock";
+
+        if (!$job || $job->status != 1 || file_exists($lockFile)) {
             return;
         }
+
+        file_put_contents($lockFile, getmypid());
 
         // Store the original values
         $originalTimeLimit = ini_get('max_execution_time');
@@ -332,21 +427,30 @@ class CSVImportProcessor
 
         // Update ini settings for this process
         set_time_limit(0);
-        ini_set('memory_limit', '2G');
+        ini_set('memory_limit', $this->memory_limit);
 
         try {
 
-            if (!file_exists($job->filepath)) {
-                throw new \Exception('CSV file not found');
+            $handle = $this->openCSVWithRetry($job->filepath);
+
+            if (!$handle) {
+                throw new \Exception('Unable to open CSV file');
+            }
+
+            $callback = unserialize($job->callback);
+
+            if (empty($callback)) {
+                throw new \Exception('Callback function must be set before processing');
             }
 
             // Update status to processing
             $this->updateJob($jobId, ['status' => 2, 'start_time' => date('Y-m-d H:i:s')]);
-            $callback = unserialize($job->callback);
-            $handle = fopen($job->filepath, 'r');
+
+            // Set CSV reading options
+            $this->configureCSVHandle($handle);
 
             if ($job->skip_header) {
-                fgetcsv($handle);
+                fgetcsv($handle, 0, $this->delimiter, $this->enclosure, $this->escape);
             }
 
             $processed = 0;
@@ -356,13 +460,16 @@ class CSVImportProcessor
             $inserted = 0;
             $updated = 0;
             $errors = [];
-            $needsUpdate = false;
+            $buffer = [];
 
-            $models = json_decode($job->callback_model, true);
+            $loadedModels = $this->loadModels($job->callback_model);
 
-            $rowIndex = 0;
-            while (($row = fgetcsv($handle)) !== FALSE) {
-                $rowIndex++;
+            while (!feof($handle)) {
+                $row = fgetcsv($handle, 0, $this->delimiter, $this->enclosure, $this->escape);
+
+                if ($row === false) {
+                    continue;
+                }
 
                 // Skip empty rows
                 if (empty(array_filter($row))) {
@@ -370,56 +477,24 @@ class CSVImportProcessor
                     continue;
                 }
 
-                try {
+                $buffer[] = $row;
 
-                    $loadedModels = [];
-                    if (!empty($models)) {
-                        foreach ($models as $model) {
-                            $this->ci->load->model($model);
-                            $loadedModels[$model] = $this->ci->$model;
-                        }
-                    }
-
-                    $result = call_user_func($callback, $row, $rowIndex, $loadedModels);
-
-                    if (isset($result['code']) && $result['code'] === 200) {
-                        $success++;
-                        if (isset($result['code']) && $result['action'] === 'create') {
-                            $inserted++;
-                        } elseif (isset($result['code']) && $result['action'] === 'update') {
-                            $updated++;
-                        }
-                    } else {
-                        $failed++;
-                        if (isset($result['error']) && $result['error']) {
-                            $errors[] = $result['error'];
-                        }
-                    }
-                } catch (\Exception $e) {
-                    $failed++;
-                    $errors[] = $e->getMessage();
+                if (count($buffer) < $this->chunk_size) {
+                    continue;
                 }
 
-                $processed++;
-                $needsUpdate = true;
+                // Process in chunks
+                $this->processChunk($jobId, $buffer, $callback, $loadedModels, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+                $buffer = [];
 
-                // Update status every update_interval records
-                if ($processed % $this->update_interval === 0) {
-                    $this->updateProgress($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
-                    $needsUpdate = false;
-                    
-                    // Close the DB connection after each batch of 100 rows
-                    $this->ci->db->close();
-                    sleep(1); // 1 second delay to avoid overloading the DB
-
-                    // Reopen DB connection for next batch
-                    $this->ci->load->database();
-                }
+                // Update progress
+                $this->updateProgressAndReset($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
             }
 
-            // Final update for remaining records
-            if ($needsUpdate) {
-                $this->updateProgress($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+            // Process remaining buffer
+            if (!empty($buffer)) {
+                $this->processChunk($jobId, $buffer, $callback, $loadedModels, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+                $this->updateProgressAndReset($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
             }
 
             fclose($handle);
@@ -451,7 +526,145 @@ class CSVImportProcessor
             // Restore the original ini settings
             set_time_limit($originalTimeLimit);
             ini_set('memory_limit', $originalMemoryLimit);
+
+            // Remove the lock file
+            @unlink($lockFile);
+
+            // Clear memory
+            gc_collect_cycles();
         }
+    }
+
+    /**
+     * Configure CSV file handle with proper settings
+     * @param resource $handle
+     * @return void
+     */
+    private function configureCSVHandle($handle)
+    {
+        stream_set_read_buffer($handle, 8192); // 8KB read buffer
+        stream_set_chunk_size($handle, 8192);  // 8KB chunk size
+    }
+
+    /**
+     * Open CSV file with retry mechanism
+     * @param string $filepath
+     * @param int $maxRetries
+     * @return resource|false
+     */
+    private function openCSVWithRetry(string $filepath, int $maxRetries = 3)
+    {
+        if (!file_exists($filepath) || !is_readable($filepath)) {
+            throw new \InvalidArgumentException("File does not exist or is not readable: {$filepath}");
+        }
+
+        $attempt = 0;
+        do {
+            $handle = fopen($filepath, 'r');
+            if ($handle !== false) {
+                return $handle;
+            }
+            $attempt++;
+            if ($attempt < $maxRetries) {
+                sleep(1);
+            }
+        } while ($attempt < $maxRetries);
+
+        return false;
+    }
+
+    /**
+     * Process a chunk of CSV rows
+     * @param string $jobId
+     * @param array $chunk
+     * @param callable $callback
+     * @param array $loadedModels
+     * @param int &$processed
+     * @param int &$skip
+     * @param int &$success
+     * @param int &$failed
+     * @param int &$inserted
+     * @param int &$updated
+     * @param array &$errors
+     * @return void
+     */
+    private function processChunk(string $jobId, array $chunk, callable $callback, array $loadedModels, &$processed, &$skip, &$success, &$failed, &$inserted, &$updated, &$errors)
+    {
+        foreach ($chunk as $rowIndex => $row) {
+            try {
+                // Increment processed count and pass to callback
+                $currentProcessed = $processed + $rowIndex + 1;  // Update the current processed value
+                $result = call_user_func($callback, $row, $currentProcessed, $loadedModels);
+
+                if (isset($result['code']) && $result['code'] === 200) {
+                    $success++;
+                    if (isset($result['action']) && $result['action'] === 'create') {
+                        $inserted++;
+                    } elseif (isset($result['action']) && $result['action'] === 'update') {
+                        $updated++;
+                    }
+                } else {
+                    $failed++;
+                    if (isset($result['error']) && $result['error']) {
+                        $errors[] = $result['error'];
+                    }
+                }
+            } catch (\Exception $e) {
+                $failed++;
+                $errors[] = $e->getMessage();
+            }
+
+            // Check if it's time to refresh progress
+            if ($this->refresh_data != $this->chunk_size && $currentProcessed % $this->refresh_data === 0) {
+                $this->updateProgress($jobId, $currentProcessed, $skip, $success, $failed, $inserted, $updated, $errors);
+            }
+        }
+
+        $processed += count($chunk);
+    }
+
+    /**
+     * Load required models
+     * @param string $models
+     * @return array
+     */
+    private function loadModels(string $models)
+    {
+        $loadedModels = [];
+        $modelsArr = json_decode($models, true);
+
+        if (!empty($modelsArr)) {
+            foreach ($modelsArr as $model) {
+                $this->ci->load->model($model);
+                $loadedModels[$model] = $this->ci->$model;
+            }
+        }
+        return $loadedModels;
+    }
+
+    /**
+     * Update progress and reset database connection
+     * @param string $jobId
+     * @param int $processed
+     * @param int $skip
+     * @param int $success
+     * @param int $failed
+     * @param int $inserted
+     * @param int $updated
+     * @param array $errors
+     * @return void
+     */
+    private function updateProgressAndReset($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors)
+    {
+        $this->updateProgress($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+
+        // Reset DB connection
+        $this->ci->db->close();
+        sleep(1);
+        $this->ci->load->database();
+
+        // Clear memory
+        gc_collect_cycles();
     }
 
     /**
@@ -579,21 +792,34 @@ class CSVImportProcessor
     }
 
     /**
-     * Count total rows in CSV file
-     * @param string $filepath
-     * @return int
+     * Count total rows in a CSV file, ignoring empty rows.
+     *
+     * This function counts rows in a CSV file while skipping rows where all fields are empty.
+     *
+     * @param string $filepath Path to the CSV file.
+     * @return int Total number of valid rows in the CSV file.
+     * @throws RuntimeException If the file cannot be opened.
      */
     private function countRows(string $filepath)
     {
-        $linecount = 0;
-        $handle = fopen($filepath, "r");
-        while (!feof($handle)) {
-            $line = fgets($handle);
-            if (trim($line) !== '') {
-                $linecount++;
+        $lineCount = 0;
+        $handle = $this->openCSVWithRetry($filepath);
+
+        if ($handle === false) {
+            throw new \RuntimeException("Unable to open file: {$filepath}");
+        }
+
+        // Set CSV reading options
+        $this->configureCSVHandle($handle);
+
+        while (($data = fgetcsv($handle, 0, $this->delimiter, $this->enclosure, $this->escape)) !== false) {
+            // Check if the row is not entirely empty
+            if (!empty(array_filter($data, fn($field) => trim((string)$field) !== ''))) {
+                $lineCount++;
             }
         }
+
         fclose($handle);
-        return $linecount;
+        return $lineCount;
     }
 }
