@@ -25,6 +25,9 @@ This package is under active development and may contain critical bugs. It is pr
 - ⚡ Configurable processing parameters
 - 📝 Skip empty rows automatically
 - 🔍 Detailed error tracking
+- 🖥️ Smart CPU load management
+- 🔄 Automatic process recovery
+- 🛡️ Process locking mechanism
 
 ## 🔧 System Requirements
 
@@ -33,6 +36,8 @@ This package is under active development and may contain critical bugs. It is pr
 - `proc_open` and `proc_close` PHP functions enabled
 - `MySQL` database
 - Write permissions for temporary directory
+- For Linux: `mpstat` command available for CPU monitoring
+- For Windows: `wmic` command available for CPU monitoring
 
 ## 📦 Installation
 
@@ -83,13 +88,13 @@ $processor->setFileBelongsTo(1);
 $processor->setDisplayHTMLId('progress-bar-1');
 
 // Configure CSV processing parameters
-$processor->setSkipHeader(true)
-         ->setMemoryLimit('1G')
+$processor->setMemoryLimit('1G')
          ->setDelimiter(',')
          ->setEnclosure('"')
          ->setEscape('\\')
          ->setChunkSize(1000)
-         ->setRecordUpdateInterval(250);
+         ->setRecordUpdateInterval(250)
+         ->setSkipHeader(true);
 
 // Load specific models for processing
 $processor->setCallbackModel(['User_model', 'Product_model']);
@@ -135,26 +140,21 @@ $jobId = $processor->process('/path/to/your/encryptFileName.csv', 'originalFileN
 ### Process Control
 
 ```php
-$processor = new \OnlyPHP\CSVSimpleImporter\CSVImportProcessor();
-
 // Kill a running process
 $processor->killProcess($jobId);
 
 // Check process status
 $status = $processor->getStatus($jobId);
+
+// Check status for all processes owned by a user
+$status = $processor->getStatusByOwner($userId);
 ```
 
-### Tracking Progress
+### Status Response Format
 
 ```php
-// Get processing status
-$status = $processor->getStatus($jobId);
-
-// Get processing status by owner user ID (returns collection of all processes)
-$status = $processor->getStatusByOwner($userid);
-
-// Status contains:
 [
+    'job_id' => 'csv_123456789',
     'total_process' => 100,
     'total_success' => 95,
     'total_failed' => 5,
@@ -170,7 +170,8 @@ $status = $processor->getStatusByOwner($userid);
     'file_name' => 'users.csv',
     'status' => 2, // 1=Pending, 2=Processing, 3=Completed, 4=Failed
     'error_message' => '[]',
-    'percentage_completion' => '10'
+    'percentage_completion' => '10',
+    'last_check' => '2024-01-05 12:34:56'
 ]
 ```
 
@@ -229,6 +230,25 @@ return [
     'error' => 'Error message'
 ];
 ```
+
+## 🔒 Process Management Features
+
+### CPU Load Management
+The system automatically monitors server CPU load and manages processes accordingly:
+- Delays process start if CPU load is above 90%
+- Continuously monitors load during processing
+- Platform-specific CPU monitoring (Linux uses `mpstat`, Windows uses `wmic`)
+
+### Process Recovery
+- Automatic cleanup of orphaned processes
+- Lock file management to prevent duplicate processing
+- Graceful handling of interrupted processes
+
+### Memory Management
+- Chunk-based processing to control memory usage
+- Configurable memory limits
+- Automatic garbage collection
+- Database connection management to prevent leaks
 
 ## 🤝 Contributing
 

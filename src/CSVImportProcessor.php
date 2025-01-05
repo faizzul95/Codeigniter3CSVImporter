@@ -461,6 +461,7 @@ class CSVImportProcessor
             $updated = 0;
             $errors = [];
             $buffer = [];
+            $totalChunkProcess = 0;
 
             $loadedModels = $this->loadModels($job->callback_model);
 
@@ -489,19 +490,23 @@ class CSVImportProcessor
 
                 // Update progress
                 $this->updateProgressAndReset($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+
+                // Update total chunk
+                $totalChunkProcess++;
             }
 
             // Process remaining buffer
             if (!empty($buffer)) {
                 $this->processChunk($jobId, $buffer, $callback, $loadedModels, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
                 $this->updateProgressAndReset($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+                $totalChunkProcess++;
             }
 
             fclose($handle);
 
             // Update final status
             $endTime = date('Y-m-d H:i:s');
-            $runTime = strtotime($endTime) - strtotime($job->start_time);
+            $runTime = max(0, (strtotime($endTime) - strtotime($job->start_time)) - $totalChunkProcess);
 
             $this->updateJob($jobId, [
                 'status' => 3,
@@ -591,9 +596,18 @@ class CSVImportProcessor
     private function processChunk(string $jobId, array $chunk, callable $callback, array $loadedModels, &$processed, &$skip, &$success, &$failed, &$inserted, &$updated, &$errors)
     {
         foreach ($chunk as $rowIndex => $row) {
+
+            // Skip only if row has no content at all
+            if ($row === null || !$this->hasContent($row)) {
+                $skip++;
+                continue;
+            }
+
             try {
+
                 // Increment processed count and pass to callback
                 $currentProcessed = $processed + $rowIndex + 1;  // Update the current processed value
+
                 $result = call_user_func($callback, $row, $currentProcessed, $loadedModels);
 
                 if (isset($result['code']) && $result['code'] === 200) {
@@ -606,12 +620,12 @@ class CSVImportProcessor
                 } else {
                     $failed++;
                     if (isset($result['error']) && $result['error']) {
-                        $errors[] = $result['error'];
+                        $errors['data'][] = $result['error'];
                     }
                 }
             } catch (\Exception $e) {
                 $failed++;
-                $errors[] = $e->getMessage();
+                $errors['system'] = $e->getMessage();
             }
 
             // Check if it's time to refresh progress
@@ -742,6 +756,7 @@ class CSVImportProcessor
             : 0;
 
         return [
+            'job_id' => $job->job_id,
             'total_process' => $totalProcessed,
             'total_success' => (int)$job->total_success,
             'total_failed' => (int)$job->total_failed,
@@ -752,6 +767,7 @@ class CSVImportProcessor
             'file_name' => $job->filename,
             'status' => $job->status,
             'error_message' => $job->error_message,
+            'last_check' => date('Y-m-d H:i:s'),
             'percentage_completion' => $percentageCompletion
         ];
     }
@@ -792,12 +808,10 @@ class CSVImportProcessor
     }
 
     /**
-     * Count total rows in a CSV file, ignoring empty rows.
-     *
-     * This function counts rows in a CSV file while skipping rows where all fields are empty.
+     * Count total rows in a CSV file, counting any row that has at least one non-empty field
      *
      * @param string $filepath Path to the CSV file.
-     * @return int Total number of valid rows in the CSV file.
+     * @return int Total number of rows in the CSV file.
      * @throws RuntimeException If the file cannot be opened.
      */
     private function countRows(string $filepath)
@@ -813,13 +827,30 @@ class CSVImportProcessor
         $this->configureCSVHandle($handle);
 
         while (($data = fgetcsv($handle, 0, $this->delimiter, $this->enclosure, $this->escape)) !== false) {
-            // Check if the row is not entirely empty
-            if (!empty(array_filter($data, fn($field) => trim((string)$field) !== ''))) {
+            // Count row if at least one field has non-empty content
+            if ($data !== null && $this->hasContent($data)) {
                 $lineCount++;
             }
         }
 
         fclose($handle);
         return $lineCount;
+    }
+
+    /**
+     * Check if array has at least one non-empty value
+     * 
+     * @param array $row
+     * @return bool
+     */
+    private function hasContent(array $row): bool
+    {
+        foreach ($row as $field) {
+            // Check if the field has any content after trimming
+            if ($field !== null && trim((string)$field) !== '') {
+                return true;
+            }
+        }
+        return false;
     }
 }
