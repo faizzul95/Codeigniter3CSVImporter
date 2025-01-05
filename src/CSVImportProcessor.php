@@ -463,8 +463,6 @@ class CSVImportProcessor
             $buffer = [];
             $totalChunkProcess = 0;
 
-            $loadedModels = $this->loadModels($job->callback_model);
-
             while (!feof($handle)) {
                 $row = fgetcsv($handle, 0, $this->delimiter, $this->enclosure, $this->escape);
 
@@ -485,7 +483,7 @@ class CSVImportProcessor
                 }
 
                 // Process in chunks
-                $this->processChunk($jobId, $buffer, $callback, $loadedModels, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+                $this->processChunk($jobId, $buffer, $callback, $job->callback_model, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
                 $buffer = [];
 
                 // Update progress
@@ -497,7 +495,7 @@ class CSVImportProcessor
 
             // Process remaining buffer
             if (!empty($buffer)) {
-                $this->processChunk($jobId, $buffer, $callback, $loadedModels, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
+                $this->processChunk($jobId, $buffer, $callback, $job->callback_model, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
                 $this->updateProgressAndReset($jobId, $processed, $skip, $success, $failed, $inserted, $updated, $errors);
                 $totalChunkProcess++;
             }
@@ -506,7 +504,15 @@ class CSVImportProcessor
 
             // Update final status
             $endTime = date('Y-m-d H:i:s');
-            $runTime = max(0, (strtotime($endTime) - strtotime($job->start_time)) - $totalChunkProcess);
+            // Check if start_time is set and valid, otherwise set a default or handle gracefully
+            $startTime = isset($job->start_time) && !empty($job->start_time) ? $job->start_time : null;
+
+            if ($startTime !== null) {
+                $runTime = max(0, (strtotime($endTime) - strtotime($startTime)) - $totalChunkProcess);
+            } else {
+                // Handle the case where start_time is null or invalid
+                $runTime = 0; // Default runtime or appropriate fallback value
+            }
 
             $this->updateJob($jobId, [
                 'status' => 3,
@@ -583,7 +589,7 @@ class CSVImportProcessor
      * @param string $jobId
      * @param array $chunk
      * @param callable $callback
-     * @param array $loadedModels
+     * @param string $loadedModels
      * @param int &$processed
      * @param int &$skip
      * @param int &$success
@@ -593,7 +599,7 @@ class CSVImportProcessor
      * @param array &$errors
      * @return void
      */
-    private function processChunk(string $jobId, array $chunk, callable $callback, array $loadedModels, &$processed, &$skip, &$success, &$failed, &$inserted, &$updated, &$errors)
+    private function processChunk(string $jobId, array $chunk, callable $callback, string $loadedModels, &$processed, &$skip, &$success, &$failed, &$inserted, &$updated, &$errors)
     {
         foreach ($chunk as $rowIndex => $row) {
 
@@ -605,12 +611,14 @@ class CSVImportProcessor
 
             try {
 
+                $models = $this->loadModels($loadedModels);
+
                 // Increment processed count and pass to callback
                 $currentProcessed = $processed + $rowIndex + 1;  // Update the current processed value
 
-                $result = call_user_func($callback, $row, $currentProcessed, $loadedModels);
+                $result = call_user_func($callback, $row, $currentProcessed, $models);
 
-                if (isset($result['code']) && $result['code'] === 200) {
+                if (isset($result['code']) && in_array($result['code'], [200, 201])) {
                     $success++;
                     if (isset($result['action']) && $result['action'] === 'create') {
                         $inserted++;
@@ -625,7 +633,7 @@ class CSVImportProcessor
                 }
             } catch (\Exception $e) {
                 $failed++;
-                $errors['system'] = $e->getMessage();
+                $errors['system'][] = $e->getMessage();
             }
 
             // Check if it's time to refresh progress
