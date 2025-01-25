@@ -3,14 +3,21 @@
 namespace OnlyPHP\Codeigniter3CSVImporter;
 
 use OnlyPHP\Codeigniter3CSVImporter\Traits\BackgroundRunnerTraits;
+use OnlyPHP\Codeigniter3CSVImporter\Traits\BackgroundRunnerTableTraits;
 use function Opis\Closure\{serialize, unserialize};
 
 class CSVImportProcessor
 {
-    use BackgroundRunnerTraits;
+    use BackgroundRunnerTraits, BackgroundRunnerTableTraits;
+
+    /**
+     * Debug mode
+     *
+     * @var boolean
+     */
+    public $debug = false;
 
     private $ci;
-    private $table = 'csv_process_jobs';
     private $skipHeader = true;
     private $userId = null;
     private $displayId = null;
@@ -32,136 +39,37 @@ class CSVImportProcessor
         $this->ci->load->database('default', TRUE);
 
         $this->checkAndCreateTable();
+
+        // INI setting
+        if ($this->debug) {
+            error_reporting(-1);
+            ini_set('display_errors', 1);
+        }
     }
 
     /**
-     * Check and create required database table
-     * @return void
+     * Set the debug mode
+     * @param bool $status
+     * @return $this
      */
-    private function checkAndCreateTable()
+    public function onDebug(bool $status = true)
     {
-        if (!$this->ci->db->table_exists($this->table)) {
-            $this->ci->load->dbforge();
+        $this->debug = $status;
+        return $this;
+    }
 
-            $fields = [
-                'id' => [
-                    'type' => 'BIGINT',
-                    'unsigned' => TRUE,
-                    'auto_increment' => TRUE
-                ],
-                'job_id' => [
-                    'type' => 'VARCHAR',
-                    'constraint' => '100',
-                    'unique' => TRUE
-                ],
-                'filepath' => [
-                    'type' => 'VARCHAR',
-                    'constraint' => '255',
-                    'null' => TRUE
-                ],
-                'filename' => [
-                    'type' => 'VARCHAR',
-                    'constraint' => '255',
-                    'null' => TRUE
-                ],
-                'user_id' => [
-                    'type' => 'BIGINT',
-                    'unsigned' => TRUE,
-                    'null' => TRUE
-                ],
-                'total_data' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0
-                ],
-                'total_processed' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0
-                ],
-                'total_skip_empty_row' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0
-                ],
-                'total_success' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0
-                ],
-                'total_failed' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0
-                ],
-                'total_inserted' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0
-                ],
-                'total_updated' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0
-                ],
-                'callback' => [
-                    'type' => 'LONGTEXT',
-                    'null' => TRUE
-                ],
-                'callback_model' => [
-                    'type' => 'VARCHAR',
-                    'constraint' => '255',
-                    'null' => TRUE
-                ],
-                'error_message' => [
-                    'type' => 'LONGTEXT',
-                    'null' => TRUE
-                ],
-                'display_html_id' => [
-                    'type' => 'VARCHAR',
-                    'constraint' => '255',
-                    'null' => TRUE
-                ],
-                'skip_header' => [
-                    'type' => 'TINYINT',
-                    'constraint' => 1,
-                    'default' => 1,
-                    'comment' => '1 - Yes, 0 - No'
-                ],
-                'status' => [
-                    'type' => 'TINYINT',
-                    'constraint' => 1,
-                    'default' => 1,
-                    'comment' => '1 - Pending, 2 - Processing, 3 - Completed, 4 - Failed'
-                ],
-                'start_time' => [
-                    'type' => 'TIMESTAMP',
-                    'null' => TRUE
-                ],
-                'end_time' => [
-                    'type' => 'TIMESTAMP',
-                    'null' => TRUE
-                ],
-                'run_time' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'default' => 0,
-                    'comment' => 'in seconds'
-                ],
-                'created_at' => [
-                    'type' => 'TIMESTAMP',
-                    'default' => 'CURRENT_TIMESTAMP'
-                ],
-                'updated_at' => [
-                    'type' => 'TIMESTAMP',
-                    'null' => TRUE
-                ]
-            ];
-
-            $this->ci->dbforge->add_field($fields);
-            $this->ci->dbforge->add_key('id', TRUE);
-            $this->ci->dbforge->create_table($this->table, FALSE, ['ENGINE' => 'InnoDB', 'COLLATE' => 'utf8mb4_general_ci']);
-        }
+    /**
+     * Set the cli path for processing
+     * @param string $route
+     * @param string $files
+     * @return $this
+     */
+    public function setCLIPath(string $route, string $files = 'index.php')
+    {
+        $this->pathToCLIProcess = $route;
+        $this->initFiles = $files;
+        $this->customCLIPath = true;
+        return $this;
     }
 
     /**
@@ -221,7 +129,7 @@ class CSVImportProcessor
 
     /**
      * Set memory limit for processing
-     * @param string $limit Memory limit (e.g., '2G', '512M')
+     * @param string $limit Memory limit (e.g., '2G', '512M', '128M')
      * @return $this
      */
     public function setMemoryLimit(string $limit)
